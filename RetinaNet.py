@@ -31,7 +31,7 @@ def group_normalization(x, is_training, G = 32, ESP = 1e-5, scope = 'group_norm'
         # 5. create gamma, bete
         gamma = tf.Variable(tf.constant(1.0, shape = [C]), dtype = tf.float32, name = 'gamma')
         beta = tf.Variable(tf.constant(0.0, shape = [C]), dtype = tf.float32, name = 'beta')
-
+        
         gamma = tf.reshape(gamma, [1, C, 1, 1])
         beta = tf.reshape(beta, [1, C, 1, 1])
 
@@ -49,11 +49,11 @@ def conv_bn_relu(x, filters, kernel_size, strides, padding, is_training, scope, 
         else:
             x = tf.layers.conv2d_transpose(inputs = x, filters = filters, kernel_size = kernel_size, strides = strides, padding = padding, kernel_initializer = initializer, use_bias = use_bias, name = 'upconv2d')
         
-        # if gn:
-        #     x = group_normalization(x, is_training = is_training, scope = 'gn')
-
         if bn:
-            x = tf.layers.batch_normalization(inputs = x, training = is_training, name = 'bn')
+            x = group_normalization(x, is_training = is_training, scope = 'gn')
+
+        # if bn:
+        #    x = tf.layers.batch_normalization(inputs = x, training = is_training, name = 'bn')
         
         if activation:
             x = tf.nn.relu(x, name = 'relu')
@@ -83,9 +83,38 @@ def build_head_cls(x, is_training, name, depth = 4):
         x = tf.layers.conv2d(inputs = x, filters = CLASSES * ANCHORS, kernel_size = [3, 3], strides = 1, padding = 'same', kernel_initializer = initializer, bias_initializer = tf.constant_initializer(-math.log((1 - 0.01) / 0.01)), name = 'conv')
     return x
 
+def Decode_Layer(offset_bboxes, anchors):
+    # 1. offset bboxes
+    tx = offset_bboxes[..., 0]
+    ty = offset_bboxes[..., 1]
+    tw = tf.clip_by_value(offset_bboxes[..., 2], -10, 5)
+    th = tf.clip_by_value(offset_bboxes[..., 3], -10, 5)
+
+    # 2. anchors
+    wa = anchors[:, 2] - anchors[:, 0]
+    ha = anchors[:, 3] - anchors[:, 1]
+    xa = anchors[:, 0] + wa / 2
+    ya = anchors[:, 1] + ha / 2
+
+    # 3. calculate decode bboxes (cxcywh)
+    x = tx * wa + xa
+    y = ty * ha + ya
+    w = tf.exp(tw) * wa
+    h = tf.exp(th) * ha
+
+    # 5. pred_bboxes (cxcywh -> xyxy)
+    xmin = tf.clip_by_value(x - w / 2, 0, IMAGE_WIDTH - 1)
+    ymin = tf.clip_by_value(y - h / 2, 0, IMAGE_HEIGHT - 1)
+    xmax = tf.clip_by_value(x + w / 2, 0, IMAGE_WIDTH - 1)
+    ymax = tf.clip_by_value(y + h / 2, 0, IMAGE_HEIGHT - 1)
+
+    pred_bboxes = tf.stack([xmin, ymin, xmax, ymax])
+    pred_bboxes = tf.transpose(pred_bboxes, perm = [1, 2, 0])
+    return pred_bboxes
+
 def RetinaNet_ResNet_50(input_var, is_training, reuse = False):
 
-    x = input_var - [103.939, 123.68, 116.779]
+    x = input_var - MEAN
     with tf.contrib.slim.arg_scope(resnet_v2.resnet_arg_scope()):
         logits, end_points = resnet_v2.resnet_v2_50(x, is_training = is_training, reuse = reuse)
     
@@ -99,7 +128,7 @@ def RetinaNet_ResNet_50(input_var, is_training, reuse = False):
     pyramid_dic['C3'] = feature_maps[2]
     pyramid_dic['C4'] = feature_maps[1]
     pyramid_dic['C5'] = feature_maps[0]
-
+    
     retina_dic = {}
     retina_sizes = []
     

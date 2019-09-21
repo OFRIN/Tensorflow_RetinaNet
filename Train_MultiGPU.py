@@ -20,11 +20,11 @@ from RetinaNet_Utils import *
 
 from mAP_Calculator import *
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
+os.environ["CUDA_VISIBLE_DEVICES"] = GPU_INFO
 
 # 1. dataset
-train_xml_paths = [ROOT_DIR + line.strip() for line in open('./dataset/train.txt', 'r').readlines()]
-valid_xml_paths = [ROOT_DIR + line.strip() for line in open('./dataset/valid.txt', 'r').readlines()]
+train_xml_paths = glob.glob(ROOT_DIR + 'train2017/xml/*.xml')
+valid_xml_paths = glob.glob(ROOT_DIR + 'valid2017/xml/*.xml')
 valid_xml_count = len(valid_xml_paths)
 
 open('log.txt', 'w')
@@ -58,6 +58,8 @@ pred_bboxes_op = tf.concat(pred_bboxes_ops, axis = 0)
 pred_classes_op = tf.concat(pred_classes_ops, axis = 0)
 
 retina_utils.generate_anchors(retina_sizes)
+pred_bboxes_op = Decode_Layer(pred_bboxes_op, retina_utils.anchors)
+
 _, retina_size, _ = pred_bboxes_op.shape.as_list()
 
 gt_bboxes_var = tf.placeholder(tf.float32, [BATCH_SIZE, retina_size, 4])
@@ -68,7 +70,7 @@ log_print('[i] pred_classes_op : {}'.format(pred_classes_op))
 log_print('[i] gt_bboxes_var : {}'.format(gt_bboxes_var))
 log_print('[i] gt_classes_var : {}'.format(gt_classes_var))
 
-loss_op, focal_loss_op, smooth_l1_loss_op = RetinaNet_Loss(pred_bboxes_op, pred_classes_op, gt_bboxes_var, gt_classes_var)
+loss_op, focal_loss_op, giou_loss_op = RetinaNet_Loss(pred_bboxes_op, pred_classes_op, gt_bboxes_var, gt_classes_var)
 
 vars = tf.trainable_variables()
 l2_reg_loss_op = tf.add_n([tf.nn.l2_loss(var) for var in vars]) * WEIGHT_DECAY
@@ -76,15 +78,38 @@ loss_op += l2_reg_loss_op
 
 learning_rate_var = tf.placeholder(tf.float32)
 with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-    # train_op = tf.train.AdamOptimizer(learning_rate_var).minimize(loss_op, colocate_gradients_with_ops = True)
-    train_op = tf.train.MomentumOptimizer(learning_rate_var, momentum = 0.9).minimize(loss_op, colocate_gradients_with_ops = True)
+    train_op = tf.train.AdamOptimizer(learning_rate_var).minimize(loss_op, colocate_gradients_with_ops = True)
+    # train_op = tf.train.MomentumOptimizer(learning_rate_var, momentum = 0.9).minimize(loss_op, colocate_gradients_with_ops = True)
 
-tf.summary.scalar('loss', loss_op)
-tf.summary.scalar('focal_loss', focal_loss_op)
-tf.summary.scalar('smooth_l1_loss', smooth_l1_loss_op)
-tf.summary.scalar('l2_regularization_Loss', l2_reg_loss_op)
-tf.summary.scalar('learning_rate', learning_rate_var)
-summary_op = tf.summary.merge_all()
+train_summary_dic = {
+    'Total_Loss' : loss_op,
+    'Focal_Loss' : focal_loss_op,
+    'GIoU_Loss' : giou_loss_op,
+    'L2_Regularization_Loss' : l2_reg_loss_op,
+    'Learning_rate' : learning_rate_var,
+}
+
+valid_precision_var = tf.placeholder(tf.float32)
+valid_recall_var = tf.placeholder(tf.float32)
+valid_mAP_var = tf.placeholder(tf.float32)
+
+valid_summary_dic = {
+    'Validation_Preicision' : valid_precision_var,
+    'Validation_Recall' : valid_recall_var,
+    'Validation_mAP' : valid_mAP_var,
+}
+
+train_summary_list = []
+for name in train_summary_dic.keys():
+    value = train_summary_dic[name]
+    train_summary_list.append(tf.summary.scalar(name, value))
+train_summary_op = tf.summary.merge(train_summary_list)
+
+valid_summary_list = []
+for name in valid_summary_dic.keys():
+    value = valid_summary_dic[name]
+    valid_summary_list.append(tf.summary.scalar(name, value))
+valid_summary_op = tf.summary.merge(valid_summary_list)
 
 # 3. train
 sess = tf.Session()
@@ -121,11 +146,12 @@ log_print('[i] decay_iteration : {}'.format(decay_iteration))
 
 loss_list = []
 focal_loss_list = []
-smooth_l1_loss_list = []
+giou_loss_list = []
 l2_reg_loss_list = []
 train_time = time.time()
 
 train_writer = tf.summary.FileWriter('./logs/train')
+valid_writer = tf.summary.FileWriter('./logs/valid')
 
 for iter in range(1, max_iteration + 1):
     if iter in decay_iteration:
@@ -164,7 +190,7 @@ for iter in range(1, max_iteration + 1):
     batch_gt_classes = np.asarray(batch_gt_classes, dtype = np.float32)
 
     _feed_dict = {input_var : batch_image_data, gt_bboxes_var : batch_gt_bboxes, gt_classes_var : batch_gt_classes, is_training : True, learning_rate_var : learning_rate}
-    log = sess.run([train_op, loss_op, focal_loss_op, smooth_l1_loss_op, l2_reg_loss_op, summary_op], feed_dict = _feed_dict)
+    log = sess.run([train_op, loss_op, focal_loss_op, giou_loss_op, l2_reg_loss_op, train_summary_op], feed_dict = _feed_dict)
     # print(log[1:-1])
     
     if np.isnan(log[1]):
@@ -173,22 +199,22 @@ for iter in range(1, max_iteration + 1):
 
     loss_list.append(log[1])
     focal_loss_list.append(log[2])
-    smooth_l1_loss_list.append(log[3])
+    giou_loss_list.append(log[3])
     l2_reg_loss_list.append(log[4])
     train_writer.add_summary(log[5], iter)
 
     if iter % LOG_ITERATION == 0:
         loss = np.mean(loss_list)
         focal_loss = np.mean(focal_loss_list)
-        smooth_l1_loss = np.mean(smooth_l1_loss_list)
+        giou_loss = np.mean(giou_loss_list)
         l2_reg_loss = np.mean(l2_reg_loss_list)
         train_time = int(time.time() - train_time)
         
-        log_print('[i] iter : {}, loss : {:.4f}, focal_loss : {:.4f}, smooth_l1_loss : {:.4f}, l2_reg_loss : {:.4f}, train_time : {}sec'.format(iter, loss, focal_loss, smooth_l1_loss, l2_reg_loss, train_time))
+        log_print('[i] iter : {}, loss : {:.4f}, focal_loss : {:.4f}, giou_loss : {:.4f}, l2_reg_loss : {:.4f}, train_time : {}sec'.format(iter, loss, focal_loss, giou_loss, l2_reg_loss, train_time))
 
         loss_list = []
         focal_loss_list = []
-        smooth_l1_loss_list = []
+        giou_loss_list = []
         l2_reg_loss_list = []
         train_time = time.time()
 
@@ -199,7 +225,6 @@ for iter in range(1, max_iteration + 1):
 
         batch_image_data = []
         batch_image_wh = []
-
         batch_gt_bboxes = []
         batch_gt_classes = []
 
@@ -211,7 +236,6 @@ for iter in range(1, max_iteration + 1):
             
             batch_image_data.append(image.astype(np.float32))
             batch_image_wh.append(ori_image.shape[:-1][::-1])
-
             batch_gt_bboxes.append(gt_bboxes)
             batch_gt_classes.append(gt_classes)
 
@@ -221,24 +245,34 @@ for iter in range(1, max_iteration + 1):
 
                 for i in range(BATCH_SIZE):
                     gt_bboxes, gt_classes = batch_gt_bboxes[i], batch_gt_classes[i]
-                    pred_bboxes, pred_classes = retina_utils.Decode(total_pred_bboxes[i], total_pred_classes[i], batch_image_wh[i], detect_threshold = 0.01)
+                    pred_bboxes, pred_classes = retina_utils.Decode(total_pred_bboxes[i], total_pred_classes[i], batch_image_wh[i], detect_threshold = 0.5)
 
                     if pred_bboxes.shape[0] == 0:
                         pred_bboxes = np.zeros((0, 5), dtype = np.float32)
                     
                     mAP_calc.update(pred_bboxes, pred_classes, gt_bboxes, gt_classes)
+                
+                batch_image_data = []
+                batch_image_wh = []
+                batch_gt_bboxes = []
+                batch_gt_classes = []
+
+            sys.stdout.write('\r[i] validation = [{}/{}]'.format(valid_iter, valid_xml_count))
+            sys.stdout.flush()
 
         valid_time = int(time.time() - valid_time)
         print('\n[i] validation time = {}sec'.format(valid_time))
 
-        valid_mAP_list = []
-        for i, class_name in enumerate(CLASS_NAMES):
-            ap, precisions, recalls, interp_list, precision_interp_list = mAP_calc.compute_precision_recall(i)
-            valid_mAP_list.append(ap)
+        precision, recall, valid_mAP = mAP_calc.summary()
 
-        valid_mAP = np.mean(valid_mAP_list)
-        if best_valid_mAP < valid_mAP:
+        valid_log = sess.run(valid_summary_op, feed_dict = {valid_precision_var : precision, valid_recall_var : recall, valid_mAP_var : valid_mAP})
+        valid_writer.add_summary(valid_log, iter)
+
+        if best_valid_mAP < valid_mAP and precision >= MIN_PRECISION:
             best_valid_mAP = valid_mAP
+            log_print('[i] valid precision : {:.2f}%'.format(precision))
+            log_print('[i] valid recall : {:.2f}%'.format(recall))
+
             saver.save(sess, './model/RetinaNet_{}.ckpt'.format(iter))
             
         log_print('[i] valid mAP : {:.2f}%, best valid mAP : {:.2f}%'.format(valid_mAP, best_valid_mAP))

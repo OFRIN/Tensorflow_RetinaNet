@@ -6,123 +6,48 @@ import numpy as np
 
 from Utils import *
 
-class AP_Calculator:
-    def __init__(self):
-        self.fn = 0
-        self.correct = []
-        self.confidence = []
-
 class mAP_Calculator:
     def __init__(self, classes, ap_threshold = 0.5):
-        
-        self.classes = classes
         self.ap_threshold = ap_threshold
+        self.precision_list = []
+        self.recall_list = []
 
-        self.reset()
+    def get_precision_and_recall(self, pred_bboxes, pred_classes, gt_bboxes, gt_classes):
+        if len(gt_bboxes) == 0:
+            if len(pred_bboxes) == 0:
+                return 1.0, 1.0
+            else:
+                return 0.0, 0.0
 
-    def reset(self):
-        self.ap_calc_list = []
-        for i in range(self.classes):
-            self.ap_calc_list.append(AP_Calculator())
+        if len(pred_bboxes) == 0:
+            return 0.0, 0.0
 
-    def update(self, total_pred_bboxes, total_pred_classes, total_gt_bboxes, total_gt_classes):
-
-        for class_index, ap_calc in enumerate(self.ap_calc_list):
-            # get masks
-            gt_masks = total_gt_classes == class_index
-            pred_masks = total_pred_classes == class_index
-
-            # extract bboxes (with masks)
-            gt_bboxes = total_gt_bboxes[gt_masks]
-            pred_bboxes = total_pred_bboxes[pred_masks]
-
-            gt_count = len(gt_bboxes)
-            pred_count = len(pred_bboxes)
-
-            # exception case 1. 
-            if gt_count == 0:
-                # add false positives
-                if pred_count != 0:
-                    ap_calc.correct += list(np.zeros(pred_count, dtype = np.bool))
-                    ap_calc.confidence += list(pred_bboxes[:, 4])
-
-                continue
-
-            # exception case 2.
-            if pred_count == 0:
-                ap_calc.fn += gt_count
-                continue
-            
-            # calculate intersection over union.
-            gt_ious = compute_bboxes_IoU(gt_bboxes, pred_bboxes)
-
-            # calculate masks
-            gt_ap_masks = gt_ious >= self.ap_threshold
-            gt_iou_masks = np.equal(gt_ious, np.max(gt_ious, axis = -1, keepdims = True))
-
-            gt_masks = np.logical_and(gt_ap_masks, gt_iou_masks)
-
-            # update fn
-            ap_calc.fn += (gt_count - sum(np.max(gt_masks, axis = 1)))
-
-            # update tp
-            ap_calc.correct += list(np.max(gt_masks.T, axis = 1))
-            ap_calc.confidence += list(pred_bboxes[:, 4])
-
-            # print('fn : {}'.format(gt_count -  sum(np.max(gt_masks, axis = 1))))
-            # print('correct : {}'.format(list(np.max(gt_masks.T, axis = 1))))
-            # print('confidence : {}'.format(list(pred_bboxes[:, 4])))
-            # input()
-
-    def compute_precision_recall(self, class_index):
-        # get correct, confidence, all_ground_truths
-        correct_list = self.ap_calc_list[class_index].correct
-        confidence_list = self.ap_calc_list[class_index].confidence
-        all_ground_truths = np.sum(correct_list) + self.ap_calc_list[class_index].fn
-
-        # list -> numpy
-        confidence_list = np.asarray(confidence_list, dtype = np.float32)
-        correct_list = np.asarray(correct_list, dtype = np.bool)
+        pred_count, gt_count = len(pred_bboxes), len(gt_bboxes)
         
-        # Ascending (confidence)
-        sort_indexs = confidence_list.argsort()[::-1]
-        confidence_list = confidence_list[sort_indexs]
-        correct_list = correct_list[sort_indexs]
-        
-        correct_detections = 0
-        all_detections = 0
-        
-        # calculate precision/recall
-        precision_list = []
-        recall_list = []
+        iou_mask = compute_bboxes_IoU(pred_bboxes, gt_bboxes) >= self.ap_threshold
+        class_mask = np.zeros((pred_count, gt_count), dtype = np.bool)
 
-        for confidence, correct in zip(confidence_list, correct_list):
-            all_detections += 1
-            if correct: correct_detections += 1    
-            
-            precision = correct_detections / all_detections
-            recall = correct_detections / all_ground_truths
+        for i in range(pred_count):
+            class_mask[i] = pred_classes[i] == gt_classes
 
-            precision_list.append(precision)
-            recall_list.append(recall)
-
-        precision_list = np.asarray(precision_list, dtype = np.float32)
-        recall_list = np.asarray(recall_list, dtype = np.float32)
+        mask = np.logical_and(iou_mask, class_mask)
+        precision = np.mean(np.max(mask, axis = 1))
+        recall = np.mean(np.max(mask.T, axis = 1))
         
-        # calculating the interpolation performed in 11 points (0.0 -> 1.0, +0.01)
-        precision_interp_list = []
-        interp_list = np.arange(0, 10 + 1) / 10
+        return precision, recall
+    
+    def update(self, pred_bboxes, pred_classes, gt_bboxes, gt_classes):
+        precision, recall = self.get_precision_and_recall(pred_bboxes, pred_classes, gt_bboxes, gt_classes)
 
-        for interp in interp_list:
-            try:
-                precision_interp = max(precision_list[recall_list >= interp])
-            except:
-                precision_interp = 0.0
-            
-            precision_interp_list.append(precision_interp)
-        
-        ap = np.mean(precision_interp_list) * 100
-        return ap, precision_list, recall_list, interp_list, precision_interp_list
+        self.precision_list.append(precision)
+        self.recall_list.append(recall)
+
+    def summary(self):
+        precision = np.mean(self.precision_list) * 100
+        recall = np.mean(self.recall_list) * 100
+        mAP = (precision + recall) / 2
+
+        return precision, recall, mAP
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
@@ -152,19 +77,6 @@ if __name__ == '__main__':
 
     mAP_calc.update(pred_bboxes, pred_classes, gt_bboxes, gt_classes)
 
-    ap, precisions, recalls = mAP_calc.compute_precision_recall(0)
-    print(ap, precisions, recalls)
+    precision, recall, mAP = mAP_calc.summary()
+    print(precision, recall, mAP)
     
-    # matplotlib (precision&recall curve + interpolation)
-    plt.clf()
-    plt.plot(recalls, precisions, 'green')
-    plt.fill_between(recalls, precisions, step = 'post', alpha = 0.2, color = 'green')
-    # plt.plot(interp_list, precision_interp_list, 'ro')
-
-    plt.xlabel('Recall')
-    plt.ylabel('Precision')
-    plt.title('# Precision-recall curve ({} - {:.2f}%)'.format('0', ap))
-    plt.ylim([0.0, 1.05])
-    plt.xlim([0.0, 1.0])
-    plt.show()
-    # plt.savefig('./results/{}.jpg'.format(class_name))

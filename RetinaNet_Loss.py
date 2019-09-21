@@ -39,67 +39,49 @@ def Focal_Loss(pred_classes, gt_classes, alpha = 0.25, gamma = 2):
     return focal_loss
 
 '''
-x = pred_bboxes - gt_bboxes, if positive
-smooth_l1_loss = {
-    0.5 * (x ** 2), if |x| < 1
-    |x| - 0.5     , otherwise
-}
+GIoU = IoU - (C - (A U B))/C
+Loss = 1 - GIoU
 '''
-def Smooth_L1_Loss(pred_bboxes, gt_bboxes, gt_classes):
-    with tf.variable_scope('smooth_l1_loss'):
-        # positive_mask = [BATCH_SIZE, 22890]
-        positive_mask = tf.reduce_max(gt_classes[:, :, 1:], axis = -1, keepdims = True)
-        positive_mask = tf.cast(tf.math.equal(positive_mask, 1.), dtype = tf.float32)
+def GIoU(bboxes_1, bboxes_2):
+    with tf.variable_scope('GIoU'):
+        # 1. calulate intersection over union
+        area_1 = (bboxes_1[..., 2] - bboxes_1[..., 0]) * (bboxes_1[..., 3] - bboxes_1[..., 1])
+        area_2 = (bboxes_2[..., 2] - bboxes_2[..., 0]) * (bboxes_2[..., 3] - bboxes_2[..., 1])
         
-        # positive_count = [BATCH_SIZE]
-        positive_count = tf.reduce_sum(positive_mask, axis = 1)
-        positive_count = tf.clip_by_value(positive_count, 1, positive_count)
+        intersection_wh = tf.minimum(bboxes_1[:, :, 2:], bboxes_2[:, :, 2:]) - tf.maximum(bboxes_1[:, :, :2], bboxes_2[:, :, :2])
+        intersection_wh = tf.maximum(intersection_wh, 0)
+        
+        intersection = intersection_wh[..., 0] * intersection_wh[..., 1]
+        union = (area_1 + area_2) - intersection
+        
+        ious = intersection / tf.maximum(union, 1e-10)
 
-        # pos_pred_bboxes = [BATCH_SIZE, 22890, 4]
-        # pos_gt_bboxes = [BATCH_SIZE, 22890, 4]
-        pos_pred_bboxes = positive_mask * pred_bboxes
-        pos_gt_bboxes = positive_mask * gt_bboxes
-
-        # smooth_l1_loss = [BATCH_SIZE, 22890, 4]
-        x = tf.abs(pos_pred_bboxes - pos_gt_bboxes)
-        smooth_l1_loss = tf.where(tf.less(x, 1.0), 0.5 * tf.pow(x, 2), x - 0.5)
-
-        # smooth_l1_loss = [BATCH_SIZE]
-        smooth_l1_loss = tf.reduce_sum(smooth_l1_loss, axis = [1, 2])
-    
-    return tf.reduce_mean(smooth_l1_loss / positive_count)
+        # 2. (C - (A U B))/C
+        C_wh = tf.maximum(bboxes_1[..., 2:], bboxes_2[..., 2:]) - tf.minimum(bboxes_1[..., :2], bboxes_2[..., :2])
+        C_wh = tf.maximum(C_wh, 0.0)
+        C = C_wh[..., 0] * C_wh[..., 1]
+        
+        giou = ious - (C - union) / tf.maximum(C, 1e-10)
+    return giou
 
 def RetinaNet_Loss(pred_bboxes, pred_classes, gt_bboxes, gt_classes, alpha = 1.0):
 
-    # calculate focal_loss & smooth l1 loss
+    # calculate focal_loss & GIoU_loss
     focal_loss_op = Focal_Loss(pred_classes, gt_classes)
-    smooth_l1_loss_op = Smooth_L1_Loss(pred_bboxes, gt_bboxes, gt_classes)
+
+    # positive_mask = [BATCH_SIZE, 22890]
+    positive_mask = tf.reduce_max(gt_classes[:, :, 1:], axis = -1)
+    positive_mask = tf.cast(tf.math.equal(positive_mask, 1.), dtype = tf.float32)
     
-    # summary
-    loss_op = focal_loss_op + alpha * smooth_l1_loss_op
+    # positive_count = [BATCH_SIZE]
+    positive_count = tf.reduce_sum(positive_mask, axis = 1)
+    positive_count = tf.clip_by_value(positive_count, 1, positive_count)
     
-    return loss_op, focal_loss_op, smooth_l1_loss_op
+    giou_loss_op = 1 - GIoU(pred_bboxes, gt_bboxes)
 
-if __name__ == '__main__':
-    ## check loss shape
-    pred_bboxes = tf.placeholder(tf.float32, [BATCH_SIZE, 22890, 4])
-    pred_classes = tf.placeholder(tf.float32, [BATCH_SIZE, 22890, CLASSES])
-
-    gt_bboxes = tf.placeholder(tf.float32, [BATCH_SIZE, 22890, 4])
-    gt_classes = tf.placeholder(tf.float32, [BATCH_SIZE, 22890, CLASSES])
-
-    loss_op, focal_loss_op, smooth_l1_loss_op = RetinaNet_Loss(pred_bboxes, pred_classes, gt_bboxes, gt_classes)
-    print(loss_op, focal_loss_op, smooth_l1_loss_op)
-
-    ## check ignored mask
-    # import numpy as np
-    # gt_classes = np.zeros((1, 5, 5))
-    # gt_classes[:, :, 0] = -1
-    # gt_classes[:, 0, 0] = 0
-    # gt_classes[:, 1, 0] = 0
-
-    # ignored_mask = tf.cast(tf.math.equal(gt_classes[:, :, 0], -1), dtype = tf.float32) # -1 == 1
-    # ignored_mask = tf.expand_dims(1 - ignored_mask, axis = -1) # 1 -> 0
+    giou_loss_op = tf.reduce_sum(positive_mask * giou_loss_op, axis = 1)
+    giou_loss_op = tf.reduce_mean(giou_loss_op / positive_count)
     
-    # sess = tf.Session()
-    # print(sess.run(ignored_mask))
+    loss_op = focal_loss_op + alpha * giou_loss_op
+    
+    return loss_op, focal_loss_op, giou_loss_op

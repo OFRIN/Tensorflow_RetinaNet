@@ -1,6 +1,0 @@
-[i] Train : 19922
-[i] Valid : 2214
-[i] pred_bboxes_op : Tensor("concat:0", shape=(16, 49104, 4), dtype=float32)
-[i] pred_classes_op : Tensor("concat_1:0", shape=(16, 49104, 21), dtype=float32)
-[i] gt_bboxes_var : Tensor("Placeholder_2:0", shape=(16, 49104, 4), dtype=float32)
-[i] gt_classes_var : Tensor("Placeholder_3:0", shape=(16, 49104, 21), dtype=float32)
