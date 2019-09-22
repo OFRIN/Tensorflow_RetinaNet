@@ -13,6 +13,7 @@ import tensorflow as tf
 
 from Define import *
 from Utils import *
+from Teacher import *
 
 from RetinaNet import *
 from RetinaNet_Loss import *
@@ -57,11 +58,9 @@ for gpu_id in range(NUM_GPU):
 pred_bboxes_op = tf.concat(pred_bboxes_ops, axis = 0)
 pred_classes_op = tf.concat(pred_classes_ops, axis = 0)
 
-retina_utils.generate_anchors(retina_sizes)
 pred_bboxes_op = Decode_Layer(pred_bboxes_op, retina_utils.anchors)
 
 _, retina_size, _ = pred_bboxes_op.shape.as_list()
-
 gt_bboxes_var = tf.placeholder(tf.float32, [BATCH_SIZE, retina_size, 4])
 gt_classes_var = tf.placeholder(tf.float32, [BATCH_SIZE, retina_size, CLASSES])
 
@@ -115,7 +114,7 @@ valid_summary_op = tf.summary.merge(valid_summary_list)
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
 
-# '''
+'''
 pretrained_vars = []
 for var in vars:
     if 'resnet_v2_50' in var.name:
@@ -123,10 +122,10 @@ for var in vars:
 
 pretrained_saver = tf.train.Saver(var_list = pretrained_vars)
 pretrained_saver.restore(sess, './resnet_v2_model/resnet_v2_50.ckpt')
-# '''
+'''
 
 saver = tf.train.Saver(max_to_keep = 30)
-# saver.restore(sess, './model/RetinaNet_{}.ckpt'.format(30000))
+saver.restore(sess, './model/RetinaNet_{}.ckpt'.format(10000))
 
 MAX_ITERATION = 90000
 DECAY_ITERATIONS = [60000, 80000]
@@ -153,42 +152,26 @@ train_time = time.time()
 train_writer = tf.summary.FileWriter('./logs/train')
 valid_writer = tf.summary.FileWriter('./logs/valid')
 
-for iter in range(1, max_iteration + 1):
+train_threads = []
+for i in range(NUM_THREADS):
+    train_thread = Teacher('./dataset/train.npy', retina_sizes, debug = False)
+    train_thread.start()
+    train_threads.append(train_thread)
+
+for iter in range(10000 + 1, max_iteration + 1):
     if iter in decay_iteration:
         learning_rate /= 10
         log_print('[i] learning rate decay : {} -> {}'.format(learning_rate * 10, learning_rate))
 
-    ## Default
-    batch_image_data = []
-    batch_gt_bboxes = []
-    batch_gt_classes = []
-    batch_xml_paths = random.sample(train_xml_paths, BATCH_SIZE)
+    # Thread
+    find = False
+    while not find:
+        for train_thread in train_threads:
+            if train_thread.ready:
+                find = True
+                batch_image_data, batch_gt_bboxes, batch_gt_classes = train_thread.get_batch_data()        
+                break
     
-    for xml_path in batch_xml_paths:
-        # delay = time.time()
-
-        image, gt_bboxes, gt_classes = get_data(xml_path, training = True, augment = True)
-        
-        # image = image.astype(np.uint8)
-        # for bbox in gt_bboxes:
-        #     xmin, ymin, xmax, ymax = bbox
-        #     cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
-        # cv2.imshow('show', image)
-        # cv2.waitKey(0)
-        
-        # delay = time.time() - delay
-        # print('[D] {} = {}ms'.format('xml', int(delay * 1000))) # ~ 41ms
-
-        encode_bboxes, encode_classes = retina_utils.Encode(gt_bboxes, gt_classes)
-
-        batch_image_data.append(image.astype(np.float32))
-        batch_gt_bboxes.append(encode_bboxes)
-        batch_gt_classes.append(encode_classes)
-
-    batch_image_data = np.asarray(batch_image_data, dtype = np.float32) 
-    batch_gt_bboxes = np.asarray(batch_gt_bboxes, dtype = np.float32)
-    batch_gt_classes = np.asarray(batch_gt_classes, dtype = np.float32)
-
     _feed_dict = {input_var : batch_image_data, gt_bboxes_var : batch_gt_bboxes, gt_classes_var : batch_gt_classes, is_training : True, learning_rate_var : learning_rate}
     log = sess.run([train_op, loss_op, focal_loss_op, giou_loss_op, l2_reg_loss_op, train_summary_op], feed_dict = _feed_dict)
     # print(log[1:-1])
