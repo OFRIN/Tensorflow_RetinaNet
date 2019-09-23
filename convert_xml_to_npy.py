@@ -59,7 +59,7 @@ np.save('./dataset/train.npy', data_list)
 
 # for i, xml_path in enumerate(train_xml_paths):
 #     image_path, gt_bboxes, gt_classes = xml_read(xml_path)
-    
+
 #     data = [image_path, gt_bboxes, gt_classes]
 #     data_list.append(data)
 

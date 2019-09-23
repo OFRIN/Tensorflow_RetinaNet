@@ -24,13 +24,13 @@ from mAP_Calculator import *
 os.environ["CUDA_VISIBLE_DEVICES"] = GPU_INFO
 
 # 1. dataset
-train_xml_paths = glob.glob(ROOT_DIR + 'train2017/xml/*.xml')
-valid_xml_paths = glob.glob(ROOT_DIR + 'valid2017/xml/*.xml')
-valid_xml_count = len(valid_xml_paths)
+train_data_list = np.load('./dataset/train_detection.npy', allow_pickle = True)
+valid_data_list = np.load('./dataset/validation_detection.npy', allow_pickle = True)
+valid_count = len(valid_data_list)
 
 open('log.txt', 'w')
-log_print('[i] Train : {}'.format(len(train_xml_paths)))
-log_print('[i] Valid : {}'.format(len(valid_xml_paths)))
+log_print('[i] Train : {}'.format(len(train_data_list)))
+log_print('[i] Valid : {}'.format(len(valid_data_list)))
 
 # 2. build
 input_var = tf.placeholder(tf.float32, [BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL])
@@ -58,6 +58,7 @@ for gpu_id in range(NUM_GPU):
 pred_bboxes_op = tf.concat(pred_bboxes_ops, axis = 0)
 pred_classes_op = tf.concat(pred_classes_ops, axis = 0)
 
+retina_utils.generate_anchors(retina_sizes)
 pred_bboxes_op = Decode_Layer(pred_bboxes_op, retina_utils.anchors)
 
 _, retina_size, _ = pred_bboxes_op.shape.as_list()
@@ -124,8 +125,8 @@ pretrained_saver = tf.train.Saver(var_list = pretrained_vars)
 pretrained_saver.restore(sess, './resnet_v2_model/resnet_v2_50.ckpt')
 '''
 
-saver = tf.train.Saver(max_to_keep = 30)
-saver.restore(sess, './model/RetinaNet_{}.ckpt'.format(10000))
+saver = tf.train.Saver(max_to_keep = 100)
+saver.restore(sess, './model/RetinaNet_{}.ckpt'.format(20000))
 
 MAX_ITERATION = 90000
 DECAY_ITERATIONS = [60000, 80000]
@@ -133,8 +134,8 @@ DECAY_ITERATIONS = [60000, 80000]
 best_valid_mAP = 0.0
 learning_rate = INIT_LEARNING_RATE
 
-train_iteration = len(train_xml_paths) // BATCH_SIZE
-valid_iteration = len(valid_xml_paths) // BATCH_SIZE
+train_iteration = len(train_data_list) // BATCH_SIZE
+valid_iteration = len(valid_data_list) // BATCH_SIZE
 
 max_iteration = int(MAX_ITERATION * PAPER_BATCH_SIZE / BATCH_SIZE)
 decay_iteration = np.asarray(DECAY_ITERATIONS, dtype = np.float32) * PAPER_BATCH_SIZE / BATCH_SIZE
@@ -154,11 +155,11 @@ valid_writer = tf.summary.FileWriter('./logs/valid')
 
 train_threads = []
 for i in range(NUM_THREADS):
-    train_thread = Teacher('./dataset/train.npy', retina_sizes, debug = False)
+    train_thread = Teacher('./dataset/train_detection.npy', retina_sizes, debug = False)
     train_thread.start()
     train_threads.append(train_thread)
 
-for iter in range(10000 + 1, max_iteration + 1):
+for iter in range(20000 + 1, max_iteration + 1):
     if iter in decay_iteration:
         learning_rate /= 10
         log_print('[i] learning rate decay : {} -> {}'.format(learning_rate * 10, learning_rate))
@@ -202,62 +203,69 @@ for iter in range(10000 + 1, max_iteration + 1):
         train_time = time.time()
 
     if iter % VALID_ITERATION == 0:
-        mAP_calc = mAP_Calculator(classes = CLASSES)
+        saver.save(sess, './model/RetinaNet_{}.ckpt'.format(iter))
+        continue
+        
+        # mAP_calc = mAP_Calculator(classes = CLASSES)
 
-        valid_time = time.time()
+        # valid_time = time.time()
 
-        batch_image_data = []
-        batch_image_wh = []
-        batch_gt_bboxes = []
-        batch_gt_classes = []
+        # batch_image_data = []
+        # batch_image_wh = []
+        # batch_gt_bboxes = []
+        # batch_gt_classes = []
 
-        for valid_iter, xml_path in enumerate(valid_xml_paths):
-            image_path, gt_bboxes, gt_classes = xml_read(xml_path, CLASS_NAMES)
+        # for valid_iter, data in enumerate(valid_data_list):
+        #     image_name, gt_bboxes, gt_classes = data
 
-            ori_image = cv2.imread(image_path)
-            image = cv2.resize(ori_image, (IMAGE_WIDTH, IMAGE_HEIGHT), interpolation = cv2.INTER_CUBIC)
+        #     image_path = VALID_DIR + image_name
+        #     gt_bboxes = np.asarray(gt_bboxes, dtype = np.float32)
+        #     gt_classes = np.asarray([CLASS_DIC[c] for c in gt_classes], dtype = np.int32)
+
+        #     ori_image = cv2.imread(image_path)
+        #     image = cv2.resize(ori_image, (IMAGE_WIDTH, IMAGE_HEIGHT), interpolation = cv2.INTER_CUBIC)
             
-            batch_image_data.append(image.astype(np.float32))
-            batch_image_wh.append(ori_image.shape[:-1][::-1])
-            batch_gt_bboxes.append(gt_bboxes)
-            batch_gt_classes.append(gt_classes)
+        #     batch_image_data.append(image.astype(np.float32))
+        #     batch_image_wh.append(ori_image.shape[:-1][::-1])
+        #     batch_gt_bboxes.append(gt_bboxes)
+        #     batch_gt_classes.append(gt_classes)
 
-            # calculate correct/confidence
-            if len(batch_image_data) == BATCH_SIZE:
-                total_pred_bboxes, total_pred_classes = sess.run([pred_bboxes_op, pred_classes_op], feed_dict = {input_var : batch_image_data, is_training : False})
+        #     # calculate correct/confidence
+        #     if len(batch_image_data) == BATCH_SIZE:
+        #         total_pred_bboxes, total_pred_classes = sess.run([pred_bboxes_op, pred_classes_op], feed_dict = {input_var : batch_image_data, is_training : False})
 
-                for i in range(BATCH_SIZE):
-                    gt_bboxes, gt_classes = batch_gt_bboxes[i], batch_gt_classes[i]
-                    pred_bboxes, pred_classes = retina_utils.Decode(total_pred_bboxes[i], total_pred_classes[i], batch_image_wh[i], detect_threshold = 0.5)
+        #         for i in range(BATCH_SIZE):
+        #             gt_bboxes, gt_classes = batch_gt_bboxes[i], batch_gt_classes[i]
+        #             pred_bboxes, pred_classes = retina_utils.Decode(total_pred_bboxes[i], total_pred_classes[i], batch_image_wh[i], detect_threshold = 0.5)
 
-                    if pred_bboxes.shape[0] == 0:
-                        pred_bboxes = np.zeros((0, 5), dtype = np.float32)
+        #             if pred_bboxes.shape[0] == 0:
+        #                 pred_bboxes = np.zeros((0, 5), dtype = np.float32)
                     
-                    mAP_calc.update(pred_bboxes, pred_classes, gt_bboxes, gt_classes)
+        #             mAP_calc.update(pred_bboxes, pred_classes, gt_bboxes, gt_classes)
                 
-                batch_image_data = []
-                batch_image_wh = []
-                batch_gt_bboxes = []
-                batch_gt_classes = []
-
-            sys.stdout.write('\r[i] validation = [{}/{}]'.format(valid_iter, valid_xml_count))
-            sys.stdout.flush()
-
-        valid_time = int(time.time() - valid_time)
-        print('\n[i] validation time = {}sec'.format(valid_time))
-
-        precision, recall, valid_mAP = mAP_calc.summary()
-
-        valid_log = sess.run(valid_summary_op, feed_dict = {valid_precision_var : precision, valid_recall_var : recall, valid_mAP_var : valid_mAP})
-        valid_writer.add_summary(valid_log, iter)
-
-        if best_valid_mAP < valid_mAP and precision >= MIN_PRECISION:
-            best_valid_mAP = valid_mAP
-            log_print('[i] valid precision : {:.2f}%'.format(precision))
-            log_print('[i] valid recall : {:.2f}%'.format(recall))
-
-            saver.save(sess, './model/RetinaNet_{}.ckpt'.format(iter))
+        #         batch_image_data = []
+        #         batch_image_wh = []
+        #         batch_gt_bboxes = []
+        #         batch_gt_classes = []
             
-        log_print('[i] valid mAP : {:.2f}%, best valid mAP : {:.2f}%'.format(valid_mAP, best_valid_mAP))
+        #     sys.stdout.write('\r[i] validation = [{}/{}]'.format(valid_iter, valid_count))
+        #     sys.stdout.flush()
+
+        # valid_time = int(time.time() - valid_time)
+        # print('\n[i] validation time = {}sec'.format(valid_time))
+
+        # precision, recall, valid_mAP = mAP_calc.summary()
+
+        # valid_log = sess.run(valid_summary_op, feed_dict = {valid_precision_var : precision, valid_recall_var : recall, valid_mAP_var : valid_mAP})
+        # valid_writer.add_summary(valid_log, iter)
+
+        # if best_valid_mAP < valid_mAP and precision >= MIN_PRECISION:
+        #     best_valid_mAP = valid_mAP
+        #     log_print('[i] valid precision : {:.2f}%'.format(precision))
+        #     log_print('[i] valid recall : {:.2f}%'.format(recall))
+
+        #     saver.save(sess, './model/RetinaNet_{}.ckpt'.format(iter))
+            
+        # log_print('[i] valid mAP : {:.2f}%, best valid mAP : {:.2f}%'.format(valid_mAP, best_valid_mAP))
 
 saver.save(sess, './model/RetinaNet.ckpt')

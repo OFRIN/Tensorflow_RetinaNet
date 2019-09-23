@@ -17,7 +17,7 @@ from RetinaNet_Utils import *
 class Teacher(threading.Thread):
     ready = False
     min_data_size = 0
-    max_data_size = 50
+    max_data_size = 2
 
     total_indexs = []
     total_data_list = []
@@ -29,10 +29,10 @@ class Teacher(threading.Thread):
     name = ''
     retina_utils = None
     
-    def __init__(self, npy_path, retina_sizes, min_data_size = 1, max_data_size = 50, name = 'Thread', debug = False):
+    def __init__(self, npy_path, retina_sizes, min_data_size = 1, max_data_size = 3, name = 'Thread', debug = False):
         self.name = name
         self.debug = debug
-
+        
         self.retina_utils = RetinaNet_Utils()
         self.retina_utils.generate_anchors(retina_sizes)
 
@@ -69,7 +69,11 @@ class Teacher(threading.Thread):
                 # if self.debug:
                 #     delay = time.time()
                 
-                image_path, gt_bboxes, gt_classes = data
+                image_name, gt_bboxes, gt_classes = data
+                
+                image_path = TRAIN_DIR + image_name
+                gt_bboxes = np.asarray(gt_bboxes, dtype = np.float32)
+                gt_classes = np.asarray([CLASS_DIC[c] for c in gt_classes], dtype = np.int32)
 
                 image = cv2.imread(image_path)
                 image, gt_bboxes, gt_classes = DataAugmentation(image, gt_bboxes, gt_classes)

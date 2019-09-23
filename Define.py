@@ -2,7 +2,9 @@
 # author : SangHyeon Jo <josanghyeokn@gmail.com>
 
 # dataset parameters
-ROOT_DIR = 'D:/DB/COCO/'
+ROOT_DIR = 'D:/_ImageDataset/COCO/'
+TRAIN_DIR = ROOT_DIR + 'train2017/image/'
+VALID_DIR = ROOT_DIR + 'valid2017/image/'
 
 CLASS_NAMES = ['background'] + [class_name.strip() for class_name in open('./coco/label_names.txt').readlines()]
 CLASS_DIC = {class_name : index for index, class_name in enumerate(CLASS_NAMES)}
@@ -42,7 +44,7 @@ NUM_GPU = len(GPU_INFO.split(','))
 BATCH_SIZE = 4 * NUM_GPU
 INIT_LEARNING_RATE = 1e-4
 
-NUM_THREADS = 12
+NUM_THREADS = 10
 
 PAPER_BATCH_SIZE = 16
 MAX_ITERATION = 90000

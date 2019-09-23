@@ -230,7 +230,7 @@ for iter in range(1, max_iteration + 1):
 
         valid_time = int(time.time() - valid_time)
         print('\n[i] validation time = {}sec'.format(valid_time))
-
+        
         precision, recall, valid_mAP = mAP_calc.summary()
 
         valid_log = sess.run(valid_summary_op, feed_dict = {valid_precision_var : precision, valid_recall_var : recall, valid_mAP_var : valid_mAP})
