@@ -193,17 +193,17 @@ def random_crop(image, gt_bboxes = None, gt_classes = None, threshold = CROP):
     return image, gt_bboxes.astype(np.float32), gt_classes
 
 def DataAugmentation(image, gt_bboxes, gt_classes):
-    image = random_hue(image)
-    image = random_saturation(image)
-    image = random_gray(image)
-    image = random_brightness(image)
-    image = random_gaussian_noise(image)
+    # image = random_hue(image)
+    # image = random_saturation(image)
+    # image = random_gray(image)
+    # image = random_brightness(image)
+    # image = random_gaussian_noise(image)
     
-    image, gt_bboxes = random_scale(image, gt_bboxes)
-    image, gt_bboxes = random_shift(image, gt_bboxes)
-    image, gt_bboxes = random_vertical_flip(image, gt_bboxes)
+    # image, gt_bboxes = random_scale(image, gt_bboxes)
+    # image, gt_bboxes = random_shift(image, gt_bboxes)
+    # image, gt_bboxes = random_vertical_flip(image, gt_bboxes)
     image, gt_bboxes = random_horizental_flip(image, gt_bboxes)
 
-    image, gt_bboxes, gt_classes = random_crop(image, gt_bboxes, gt_classes)
+    # image, gt_bboxes, gt_classes = random_crop(image, gt_bboxes, gt_classes)
 
     return image.astype(np.uint8), gt_bboxes, gt_classes
