@@ -78,8 +78,8 @@ loss_op += l2_reg_loss_op
 
 learning_rate_var = tf.placeholder(tf.float32)
 with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-    train_op = tf.train.AdamOptimizer(learning_rate_var).minimize(loss_op, colocate_gradients_with_ops = True)
-    # train_op = tf.train.MomentumOptimizer(learning_rate_var, momentum = 0.9).minimize(loss_op, colocate_gradients_with_ops = True)
+    # train_op = tf.train.AdamOptimizer(learning_rate_var).minimize(loss_op, colocate_gradients_with_ops = True)
+    train_op = tf.train.MomentumOptimizer(learning_rate_var, momentum = 0.9).minimize(loss_op, colocate_gradients_with_ops = True)
 
 train_summary_dic = {
     'Total_Loss' : loss_op,
@@ -115,7 +115,7 @@ valid_summary_op = tf.summary.merge(valid_summary_list)
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
 
-'''
+# '''
 pretrained_vars = []
 for var in vars:
     if 'resnet_v2_50' in var.name:
@@ -123,10 +123,10 @@ for var in vars:
 
 pretrained_saver = tf.train.Saver(var_list = pretrained_vars)
 pretrained_saver.restore(sess, './resnet_v2_model/resnet_v2_50.ckpt')
-'''
+# '''
 
 saver = tf.train.Saver(max_to_keep = 100)
-saver.restore(sess, './model/RetinaNet_{}.ckpt'.format(20000))
+# saver.restore(sess, './model/RetinaNet_{}.ckpt'.format(85000))
 
 MAX_ITERATION = 90000
 DECAY_ITERATIONS = [60000, 80000]
@@ -159,7 +159,7 @@ for i in range(NUM_THREADS):
     train_thread.start()
     train_threads.append(train_thread)
 
-for iter in range(20000 + 1, max_iteration + 1):
+for iter in range(1, max_iteration + 1):
     if iter in decay_iteration:
         learning_rate /= 10
         log_print('[i] learning rate decay : {} -> {}'.format(learning_rate * 10, learning_rate))

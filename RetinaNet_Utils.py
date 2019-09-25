@@ -21,7 +21,7 @@ class RetinaNet_Utils:
     def generate_anchors(self, sizes):
         anchors = []
         sizes = np.asarray(sizes, dtype = np.int32)
-
+        
         for i in range(len(sizes)):
             size = sizes[i]
             strides = self.image_wh / size

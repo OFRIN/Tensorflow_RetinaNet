@@ -17,12 +17,13 @@ def Focal_Loss(pred_classes, gt_classes, alpha = 0.25, gamma = 2):
         # positive_mask = [BATCH_SIZE, 22890]
         positive_mask = tf.reduce_max(gt_classes[:, :, 1:], axis = -1)
         positive_mask = tf.cast(tf.math.equal(positive_mask, 1.), dtype = tf.float32)
-
+        
         ignored_mask = tf.cast(tf.math.equal(gt_classes[:, :, 0], -1), dtype = tf.float32) # -1 == 1
         ignored_mask = tf.expand_dims(1 - ignored_mask, axis = -1) # 1 -> 0
         
         # exception 1. log(-1) -> nan !
         gt_classes = ignored_mask * gt_classes
+        pred_classes = ignored_mask * pred_classes
         
         # positive_count = [BATCH_SIZE]
         positive_count = tf.reduce_sum(positive_mask, axis = 1)
@@ -31,7 +32,7 @@ def Focal_Loss(pred_classes, gt_classes, alpha = 0.25, gamma = 2):
         # focal_loss = [BATCH_SIZE, 22890, CLASSES]
         pt = gt_classes * pred_classes + (1 - gt_classes) * (1 - pred_classes) 
         focal_loss = -alpha * tf.pow(1. - pt, gamma) * tf.log(pt + 1e-10)
-
+        
         # focal_loss = [BATCH_SIZE]
         focal_loss = tf.reduce_sum(ignored_mask * tf.abs(focal_loss), axis = [1, 2])
         focal_loss = tf.reduce_mean(focal_loss / positive_count)

@@ -89,7 +89,7 @@ def Decode_Layer(offset_bboxes, anchors):
     ty = offset_bboxes[..., 1]
     tw = tf.clip_by_value(offset_bboxes[..., 2], -10, 5)
     th = tf.clip_by_value(offset_bboxes[..., 3], -10, 5)
-
+    
     # 2. anchors
     wa = anchors[:, 2] - anchors[:, 0]
     ha = anchors[:, 3] - anchors[:, 1]
