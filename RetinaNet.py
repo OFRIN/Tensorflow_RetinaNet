@@ -1,17 +1,16 @@
 # Copyright (C) 2019 * Ltd. All rights reserved.
 # author : SangHyeon Jo <josanghyeokn@gmail.com>
 
-import math
-
 import numpy as np
 import tensorflow as tf
 
-import resnet_v2.resnet_v2 as resnet_v2
+import resnet_v1.resnet_v1 as resnet_v1
 
 from Define import *
 
-# initializer = tf.contrib.layers.xavier_initializer()
-initializer = tf.contrib.layers.variance_scaling_initializer()
+kernel_initializer = tf.random_normal_initializer(mean = 0.0, stddev = 0.01, seed = None)
+bias_initializer = tf.constant_initializer(value = 0.0)
+class_bias_initializer = tf.constant_initializer(value = -np.log((1 - 0.01) / 0.01))
 
 def group_normalization(x, is_training, G = 32, ESP = 1e-5, scope = 'group_norm'):
     with tf.variable_scope(scope):
@@ -42,18 +41,15 @@ def group_normalization(x, is_training, G = 32, ESP = 1e-5, scope = 'group_norm'
         x = tf.transpose(x, [0, 2, 3, 1])
     return x
 
-def conv_bn_relu(x, filters, kernel_size, strides, padding, is_training, scope, bn = True, activation = True, use_bias = True, upscaling = False):
+def conv_gn_relu(x, filters, kernel_size, strides, padding, is_training, scope, gn = True, activation = True, use_bias = True, upscaling = False):
     with tf.variable_scope(scope):
         if not upscaling:
-            x = tf.layers.conv2d(inputs = x, filters = filters, kernel_size = kernel_size, strides = strides, padding = padding, kernel_initializer = initializer, use_bias = use_bias, name = 'conv2d')
+            x = tf.layers.conv2d(inputs = x, filters = filters, kernel_size = kernel_size, strides = strides, padding = padding, kernel_initializer = kernel_initializer, use_bias = use_bias, name = 'conv2d')
         else:
-            x = tf.layers.conv2d_transpose(inputs = x, filters = filters, kernel_size = kernel_size, strides = strides, padding = padding, kernel_initializer = initializer, use_bias = use_bias, name = 'upconv2d')
+            x = tf.layers.conv2d_transpose(inputs = x, filters = filters, kernel_size = kernel_size, strides = strides, padding = padding, kernel_initializer = kernel_initializer, use_bias = use_bias, name = 'upconv2d')
         
-        if bn:
+        if gn:
             x = group_normalization(x, is_training = is_training, scope = 'gn')
-
-        # if bn:
-        #    x = tf.layers.batch_normalization(inputs = x, training = is_training, name = 'bn')
         
         if activation:
             x = tf.nn.relu(x, name = 'relu')
@@ -61,26 +57,26 @@ def conv_bn_relu(x, filters, kernel_size, strides, padding, is_training, scope, 
 
 def connection_block(x1, x2, is_training, scope):
     with tf.variable_scope(scope):
-        x1 = conv_bn_relu(x1, 256, [3, 3], 1, 'same', is_training, 'conv1', bn = True, activation = False)
-        x2 = conv_bn_relu(x2, 256, [1, 1], 1, 'valid', is_training, 'conv2', bn = True, activation = False)
+        x1 = conv_gn_relu(x1, 256, [3, 3], 1, 'same', is_training, 'conv1', gn = True, activation = False)
+        x2 = conv_gn_relu(x2, 256, [1, 1], 1, 'valid', is_training, 'conv2', gn = True, activation = False)
         x = tf.nn.relu(x1 + x2, name = 'relu')
     return x
 
 def build_head_loc(x, is_training, name, depth = 4):
     with tf.variable_scope(name):
         for i in range(depth):
-            x = conv_bn_relu(x, 256, (3, 3), 1, 'same', is_training, '{}'.format(i))
-
-        x = conv_bn_relu(x, 4 * ANCHORS, (3, 3), 1, 'same', is_training, 'loc', bn = False, activation = False)
+            x = conv_gn_relu(x, 256, (3, 3), 1, 'same', is_training, '{}'.format(i))
+        
+        x = conv_gn_relu(x, 4 * ANCHORS, (3, 3), 1, 'same', is_training, 'regression', gn = False, activation = False)
     return x
 
 def build_head_cls(x, is_training, name, depth = 4):
     with tf.variable_scope(name):
         for i in range(depth):
-            x = conv_bn_relu(x, 256, (3, 3), 1, 'same', is_training, '{}'.format(i))
+            x = conv_gn_relu(x, 256, (3, 3), 1, 'same', is_training, '{}'.format(i))
         
-        # x = conv_bn_relu(x, CLASSES * ANCHORS, (3, 3), 1, 'same', is_training, 'cls', bn = False, activation = False)
-        x = tf.layers.conv2d(inputs = x, filters = CLASSES * ANCHORS, kernel_size = [3, 3], strides = 1, padding = 'same', kernel_initializer = initializer, bias_initializer = tf.constant_initializer(-math.log((1 - 0.01) / 0.01)), name = 'conv')
+        x = tf.layers.conv2d(inputs = x, filters = CLASSES * ANCHORS, kernel_size = [3, 3], strides = 1, padding = 'same', 
+                             kernel_initializer = kernel_initializer, bias_initializer = class_bias_initializer, name = 'classification')
     return x
 
 def Decode_Layer(offset_bboxes, anchors):
@@ -113,40 +109,41 @@ def Decode_Layer(offset_bboxes, anchors):
     return pred_bboxes
 
 def RetinaNet_ResNet_50(input_var, is_training, reuse = False):
-
-    x = input_var - MEAN
-    with tf.contrib.slim.arg_scope(resnet_v2.resnet_arg_scope()):
-        logits, end_points = resnet_v2.resnet_v2_50(x, is_training = is_training, reuse = reuse)
+    # convert BGR -> RGB
+    x = input_var[..., ::-1] - MEAN
+    
+    with tf.contrib.slim.arg_scope(resnet_v1.resnet_arg_scope()):
+        logits, end_points = resnet_v1.resnet_v1_50(x, is_training = is_training, reuse = reuse)
     
     # for key in end_points.keys():
     #     print(key, end_points[key])
     # input()
 
     pyramid_dic = {}
-    feature_maps = [end_points['resnet_v2_50/block{}'.format(i)] for i in [4, 2, 1]]
+    feature_maps = [end_points['resnet_v1_50/block{}'.format(i)] for i in [4, 2, 1]]
     
     pyramid_dic['C3'] = feature_maps[2]
     pyramid_dic['C4'] = feature_maps[1]
     pyramid_dic['C5'] = feature_maps[0]
-    
+
     retina_dic = {}
     retina_sizes = []
     
     with tf.variable_scope('RetinaNet', reuse = reuse):
-        x = conv_bn_relu(pyramid_dic['C5'], 256, (1, 1), 1, 'valid', is_training, 'P5_conv')
+        x = conv_gn_relu(pyramid_dic['C5'], 256, (1, 1), 1, 'valid', is_training, 'P5_conv')
         pyramid_dic['P5'] = x
-
-        x = conv_bn_relu(x, 256, (3, 3), 2, 'same', is_training, 'P6_conv')
+        
+        x = conv_gn_relu(x, 256, (3, 3), 2, 'same', is_training, 'P6_conv')
         pyramid_dic['P6'] = x
         
-        x = conv_bn_relu(x, 256, (3, 3), 2, 'same', is_training, 'P7_conv')
+        x = conv_gn_relu(x, 256, (3, 3), 2, 'same', is_training, 'P7_conv')
         pyramid_dic['P7'] = x
 
-        x = conv_bn_relu(pyramid_dic['P5'], 256, (3, 3), 2, 'same', is_training, 'P4_conv_1', upscaling = True)
+        x = conv_gn_relu(pyramid_dic['P5'], 256, (3, 3), 2, 'same', is_training, 'P4_conv_1', upscaling = True)
         x = connection_block(x, pyramid_dic['C4'], is_training, 'P4_conv')
         pyramid_dic['P4'] = x
 
-        x = conv_bn_relu(pyramid_dic['P4'], 256, (3, 3), 2, 'same', is_training, 'P3_conv_1', upscaling = True)
+        x = conv_gn_relu(pyramid_dic['P4'], 256, (3, 3), 2, 'same', is_training, 'P3_conv_1', upscaling = True)
         x = connection_block(x, pyramid_dic['C3'], is_training, 'P3_conv')
         pyramid_dic['P3'] = x
         

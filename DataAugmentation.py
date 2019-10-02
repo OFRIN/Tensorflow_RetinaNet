@@ -18,7 +18,7 @@ GAUSSIAN_NOISE = 0.1
 SHIFT = 0.25
 CROP = 0.25
 
-def random_horizental_flip(image, gt_bboxes = None, threshold = FLIP_HORIZONTAL):
+def random_horizontal_flip(image, gt_bboxes = None, threshold = FLIP_HORIZONTAL):
     if random.random() <= threshold:
         image = cv2.flip(image, 1).copy()
         
@@ -192,6 +192,11 @@ def random_crop(image, gt_bboxes = None, gt_classes = None, threshold = CROP):
 
     return image, gt_bboxes.astype(np.float32), gt_classes
 
+'''
+# Focal Loss for Dense Object Detection
+4.1 Inference and Training - Optimization
+We use horizontal image flipping as the only form of data augmentation unless otherwise noted.
+'''
 def DataAugmentation(image, gt_bboxes, gt_classes):
     # image = random_hue(image)
     # image = random_saturation(image)
@@ -202,8 +207,8 @@ def DataAugmentation(image, gt_bboxes, gt_classes):
     # image, gt_bboxes = random_scale(image, gt_bboxes)
     # image, gt_bboxes = random_shift(image, gt_bboxes)
     # image, gt_bboxes = random_vertical_flip(image, gt_bboxes)
-    image, gt_bboxes = random_horizental_flip(image, gt_bboxes)
-
+    image, gt_bboxes = random_horizontal_flip(image, gt_bboxes)
+    
     # image, gt_bboxes, gt_classes = random_crop(image, gt_bboxes, gt_classes)
-
+    
     return image.astype(np.uint8), gt_bboxes, gt_classes

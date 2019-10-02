@@ -19,8 +19,6 @@ from RetinaNet import *
 from RetinaNet_Loss import *
 from RetinaNet_Utils import *
 
-from mAP_Calculator import *
-
 os.environ["CUDA_VISIBLE_DEVICES"] = GPU_INFO
 
 # 1. dataset
@@ -33,7 +31,7 @@ log_print('[i] Train : {}'.format(len(train_data_list)))
 log_print('[i] Valid : {}'.format(len(valid_data_list)))
 
 # 2. build
-input_var = tf.placeholder(tf.float32, [BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL])
+input_var = tf.placeholder(tf.float32, [None, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL])
 is_training = tf.placeholder(tf.bool)
 
 input_vars = tf.split(input_var, NUM_GPU)
@@ -78,25 +76,15 @@ loss_op += l2_reg_loss_op
 
 learning_rate_var = tf.placeholder(tf.float32)
 with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-    # train_op = tf.train.AdamOptimizer(learning_rate_var).minimize(loss_op, colocate_gradients_with_ops = True)
-    train_op = tf.train.MomentumOptimizer(learning_rate_var, momentum = 0.9).minimize(loss_op, colocate_gradients_with_ops = True)
+    train_op = tf.train.AdamOptimizer(learning_rate_var).minimize(loss_op, colocate_gradients_with_ops = True)
+    # train_op = tf.train.MomentumOptimizer(learning_rate_var, momentum = 0.9).minimize(loss_op, colocate_gradients_with_ops = True)
 
 train_summary_dic = {
-    'Total_Loss' : loss_op,
-    'Focal_Loss' : focal_loss_op,
-    'GIoU_Loss' : giou_loss_op,
-    'L2_Regularization_Loss' : l2_reg_loss_op,
+    'Loss/Total_Loss' : loss_op,
+    'Loss/Focal_Loss' : focal_loss_op,
+    'Loss/GIoU_Loss' : giou_loss_op,
+    'Loss/L2_Regularization_Loss' : l2_reg_loss_op,
     'Learning_rate' : learning_rate_var,
-}
-
-valid_precision_var = tf.placeholder(tf.float32)
-valid_recall_var = tf.placeholder(tf.float32)
-valid_mAP_var = tf.placeholder(tf.float32)
-
-valid_summary_dic = {
-    'Validation_Preicision' : valid_precision_var,
-    'Validation_Recall' : valid_recall_var,
-    'Validation_mAP' : valid_mAP_var,
 }
 
 train_summary_list = []
@@ -105,11 +93,8 @@ for name in train_summary_dic.keys():
     train_summary_list.append(tf.summary.scalar(name, value))
 train_summary_op = tf.summary.merge(train_summary_list)
 
-valid_summary_list = []
-for name in valid_summary_dic.keys():
-    value = valid_summary_dic[name]
-    valid_summary_list.append(tf.summary.scalar(name, value))
-valid_summary_op = tf.summary.merge(valid_summary_list)
+log_image_var = tf.placeholder(tf.float32, [None, SAMPLE_IMAGE_HEIGHT, SAMPLE_IMAGE_WIDTH, IMAGE_CHANNEL])
+log_image_op = tf.summary.image('Image/Train', log_image_var[..., ::-1], SAMPLES)
 
 # 3. train
 sess = tf.Session()
@@ -118,31 +103,20 @@ sess.run(tf.global_variables_initializer())
 # '''
 pretrained_vars = []
 for var in vars:
-    if 'resnet_v2_50' in var.name:
+    if 'resnet_v1_50' in var.name:
         pretrained_vars.append(var)
 
 pretrained_saver = tf.train.Saver(var_list = pretrained_vars)
-pretrained_saver.restore(sess, './resnet_v2_model/resnet_v2_50.ckpt')
+pretrained_saver.restore(sess, './resnet_v1_model/resnet_v1_50.ckpt')
 # '''
 
-saver = tf.train.Saver(max_to_keep = 100)
-# saver.restore(sess, './model/RetinaNet_{}.ckpt'.format(85000))
+saver = tf.train.Saver(max_to_keep = 30)
+# saver.restore(sess, './model/RetinaNet_{}.ckpt'.format(30000))
 
-MAX_ITERATION = 90000
-DECAY_ITERATIONS = [60000, 80000]
-
-best_valid_mAP = 0.0
 learning_rate = INIT_LEARNING_RATE
 
-train_iteration = len(train_data_list) // BATCH_SIZE
-valid_iteration = len(valid_data_list) // BATCH_SIZE
-
-max_iteration = int(MAX_ITERATION * PAPER_BATCH_SIZE / BATCH_SIZE)
-decay_iteration = np.asarray(DECAY_ITERATIONS, dtype = np.float32) * PAPER_BATCH_SIZE / BATCH_SIZE
-decay_iteration = decay_iteration.astype(np.int32)
-
-log_print('[i] max_iteration : {}'.format(max_iteration))
-log_print('[i] decay_iteration : {}'.format(decay_iteration))
+log_print('[i] max_iteration : {}'.format(MAX_ITERATION))
+log_print('[i] decay_iteration : {}'.format(DECAY_ITERATIONS))
 
 loss_list = []
 focal_loss_list = []
@@ -151,7 +125,6 @@ l2_reg_loss_list = []
 train_time = time.time()
 
 train_writer = tf.summary.FileWriter('./logs/train')
-valid_writer = tf.summary.FileWriter('./logs/valid')
 
 train_threads = []
 for i in range(NUM_THREADS):
@@ -159,8 +132,10 @@ for i in range(NUM_THREADS):
     train_thread.start()
     train_threads.append(train_thread)
 
-for iter in range(1, max_iteration + 1):
-    if iter in decay_iteration:
+sample_data_list = train_data_list[:SAMPLES]
+
+for iter in range(1, MAX_ITERATION + 1):
+    if iter in DECAY_ITERATIONS:
         learning_rate /= 10
         log_print('[i] learning rate decay : {} -> {}'.format(learning_rate * 10, learning_rate))
 
@@ -170,10 +145,10 @@ for iter in range(1, max_iteration + 1):
         for train_thread in train_threads:
             if train_thread.ready:
                 find = True
-                batch_image_data, batch_gt_bboxes, batch_gt_classes = train_thread.get_batch_data()        
+                batch_image_data, batch_encode_bboxes, batch_encode_classes = train_thread.get_batch_data()        
                 break
-    
-    _feed_dict = {input_var : batch_image_data, gt_bboxes_var : batch_gt_bboxes, gt_classes_var : batch_gt_classes, is_training : True, learning_rate_var : learning_rate}
+                
+    _feed_dict = {input_var : batch_image_data, gt_bboxes_var : batch_encode_bboxes, gt_classes_var : batch_encode_classes, is_training : True, learning_rate_var : learning_rate}
     log = sess.run([train_op, loss_op, focal_loss_op, giou_loss_op, l2_reg_loss_op, train_summary_op], feed_dict = _feed_dict)
     # print(log[1:-1])
     
@@ -186,7 +161,7 @@ for iter in range(1, max_iteration + 1):
     giou_loss_list.append(log[3])
     l2_reg_loss_list.append(log[4])
     train_writer.add_summary(log[5], iter)
-
+    
     if iter % LOG_ITERATION == 0:
         loss = np.mean(loss_list)
         focal_loss = np.mean(focal_loss_list)
@@ -202,70 +177,55 @@ for iter in range(1, max_iteration + 1):
         l2_reg_loss_list = []
         train_time = time.time()
 
-    if iter % VALID_ITERATION == 0:
-        saver.save(sess, './model/RetinaNet_{}.ckpt'.format(iter))
-        continue
+    if iter % SAMPLE_ITERATION == 0:
+        total_gt_bboxes = []
+        batch_image_data = np.zeros((BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL), dtype = np.float32)
+
+        for i, data in enumerate(sample_data_list):
+            image_name, gt_bboxes, gt_classes = data        
+            image_path = TRAIN_DIR + image_name
+
+            gt_bboxes = np.asarray(gt_bboxes, dtype = np.float32)
+            gt_classes = np.asarray([CLASS_DIC[c] for c in gt_classes], dtype = np.int32)
+
+            image = cv2.imread(image_path)
+            image_h, image_w, image_c = image.shape
+
+            tf_image = cv2.resize(image, (IMAGE_WIDTH, IMAGE_HEIGHT), interpolation = cv2.INTER_CUBIC)
+
+            gt_bboxes /= [image_w, image_h, image_w, image_h]
+            gt_bboxes *= [IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_HEIGHT]
+
+            batch_image_data[i] = tf_image.copy()
+            total_gt_bboxes.append(gt_bboxes)
+
+        total_pred_bboxes, total_pred_classes = sess.run([pred_bboxes_op, pred_classes_op], feed_dict = {input_var : batch_image_data, is_training : False})
         
-        # mAP_calc = mAP_Calculator(classes = CLASSES)
-
-        # valid_time = time.time()
-
-        # batch_image_data = []
-        # batch_image_wh = []
-        # batch_gt_bboxes = []
-        # batch_gt_classes = []
-
-        # for valid_iter, data in enumerate(valid_data_list):
-        #     image_name, gt_bboxes, gt_classes = data
-
-        #     image_path = VALID_DIR + image_name
-        #     gt_bboxes = np.asarray(gt_bboxes, dtype = np.float32)
-        #     gt_classes = np.asarray([CLASS_DIC[c] for c in gt_classes], dtype = np.int32)
-
-        #     ori_image = cv2.imread(image_path)
-        #     image = cv2.resize(ori_image, (IMAGE_WIDTH, IMAGE_HEIGHT), interpolation = cv2.INTER_CUBIC)
+        sample_images = []
+        for i in range(BATCH_SIZE):
+            image = batch_image_data[i]
+            pred_bboxes, pred_classes = retina_utils.Decode(total_pred_bboxes[i], total_pred_classes[i], [IMAGE_WIDTH, IMAGE_HEIGHT], detect_threshold = 0.50)
             
-        #     batch_image_data.append(image.astype(np.float32))
-        #     batch_image_wh.append(ori_image.shape[:-1][::-1])
-        #     batch_gt_bboxes.append(gt_bboxes)
-        #     batch_gt_classes.append(gt_classes)
+            for bbox, class_index in zip(pred_bboxes, pred_classes):
+                xmin, ymin, xmax, ymax = bbox[:4].astype(np.int32)
+                conf = bbox[4]
+                class_name = CLASS_NAMES[class_index]
 
-        #     # calculate correct/confidence
-        #     if len(batch_image_data) == BATCH_SIZE:
-        #         total_pred_bboxes, total_pred_classes = sess.run([pred_bboxes_op, pred_classes_op], feed_dict = {input_var : batch_image_data, is_training : False})
+                string = "{} : {:.2f}%".format(class_name, conf * 100)
+                cv2.putText(image, string, (xmin, ymin - 10), 1, 1, (0, 255, 0))
+                cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
 
-        #         for i in range(BATCH_SIZE):
-        #             gt_bboxes, gt_classes = batch_gt_bboxes[i], batch_gt_classes[i]
-        #             pred_bboxes, pred_classes = retina_utils.Decode(total_pred_bboxes[i], total_pred_classes[i], batch_image_wh[i], detect_threshold = 0.5)
+            for gt_bbox in total_gt_bboxes[i]:
+                xmin, ymin, xmax, ymax = gt_bbox.astype(np.int32)
+                cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 0, 255), 2)
 
-        #             if pred_bboxes.shape[0] == 0:
-        #                 pred_bboxes = np.zeros((0, 5), dtype = np.float32)
-                    
-        #             mAP_calc.update(pred_bboxes, pred_classes, gt_bboxes, gt_classes)
-                
-        #         batch_image_data = []
-        #         batch_image_wh = []
-        #         batch_gt_bboxes = []
-        #         batch_gt_classes = []
+            image = cv2.resize(image, (SAMPLE_IMAGE_WIDTH, SAMPLE_IMAGE_HEIGHT))
+            sample_images.append(image.copy())
             
-        #     sys.stdout.write('\r[i] validation = [{}/{}]'.format(valid_iter, valid_count))
-        #     sys.stdout.flush()
+        image_summary = sess.run(log_image_op, feed_dict = {log_image_var : sample_images})
+        train_writer.add_summary(image_summary, iter)
 
-        # valid_time = int(time.time() - valid_time)
-        # print('\n[i] validation time = {}sec'.format(valid_time))
-
-        # precision, recall, valid_mAP = mAP_calc.summary()
-
-        # valid_log = sess.run(valid_summary_op, feed_dict = {valid_precision_var : precision, valid_recall_var : recall, valid_mAP_var : valid_mAP})
-        # valid_writer.add_summary(valid_log, iter)
-
-        # if best_valid_mAP < valid_mAP and precision >= MIN_PRECISION:
-        #     best_valid_mAP = valid_mAP
-        #     log_print('[i] valid precision : {:.2f}%'.format(precision))
-        #     log_print('[i] valid recall : {:.2f}%'.format(recall))
-
-        #     saver.save(sess, './model/RetinaNet_{}.ckpt'.format(iter))
-            
-        # log_print('[i] valid mAP : {:.2f}%, best valid mAP : {:.2f}%'.format(valid_mAP, best_valid_mAP))
+    if iter % SAVE_ITERATION == 0:
+        saver.save(sess, './model/RetinaNet_{}.ckpt'.format(iter))
 
 saver.save(sess, './model/RetinaNet.ckpt')

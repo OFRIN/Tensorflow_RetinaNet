@@ -13,11 +13,11 @@ pt = {
 FL(pt) = −(1 − pt)γ * log(pt)
 '''
 def Focal_Loss(pred_classes, gt_classes, alpha = 0.25, gamma = 2):
-    with tf.variable_scope('Focal_Loss'):
+    with tf.variable_scope('Focal'):
         # positive_mask = [BATCH_SIZE, 22890]
         positive_mask = tf.reduce_max(gt_classes[:, :, 1:], axis = -1)
         positive_mask = tf.cast(tf.math.equal(positive_mask, 1.), dtype = tf.float32)
-        
+
         ignored_mask = tf.cast(tf.math.equal(gt_classes[:, :, 0], -1), dtype = tf.float32) # -1 == 1
         ignored_mask = tf.expand_dims(1 - ignored_mask, axis = -1) # 1 -> 0
         
@@ -32,7 +32,7 @@ def Focal_Loss(pred_classes, gt_classes, alpha = 0.25, gamma = 2):
         # focal_loss = [BATCH_SIZE, 22890, CLASSES]
         pt = gt_classes * pred_classes + (1 - gt_classes) * (1 - pred_classes) 
         focal_loss = -alpha * tf.pow(1. - pt, gamma) * tf.log(pt + 1e-10)
-        
+
         # focal_loss = [BATCH_SIZE]
         focal_loss = tf.reduce_sum(ignored_mask * tf.abs(focal_loss), axis = [1, 2])
         focal_loss = tf.reduce_mean(focal_loss / positive_count)
@@ -66,7 +66,6 @@ def GIoU(bboxes_1, bboxes_2):
     return giou
 
 def RetinaNet_Loss(pred_bboxes, pred_classes, gt_bboxes, gt_classes, alpha = 1.0):
-
     # calculate focal_loss & GIoU_loss
     focal_loss_op = Focal_Loss(pred_classes, gt_classes)
 
@@ -86,3 +85,27 @@ def RetinaNet_Loss(pred_bboxes, pred_classes, gt_bboxes, gt_classes, alpha = 1.0
     loss_op = focal_loss_op + alpha * giou_loss_op
     
     return loss_op, focal_loss_op, giou_loss_op
+
+if __name__ == '__main__':
+    ## check loss shape
+    pred_bboxes = tf.placeholder(tf.float32, [BATCH_SIZE, 22890, 4])
+    pred_classes = tf.placeholder(tf.float32, [BATCH_SIZE, 22890, CLASSES])
+
+    gt_bboxes = tf.placeholder(tf.float32, [BATCH_SIZE, 22890, 4])
+    gt_classes = tf.placeholder(tf.float32, [BATCH_SIZE, 22890, CLASSES])
+
+    loss_op, focal_loss_op, smooth_l1_loss_op = RetinaNet_Loss(pred_bboxes, pred_classes, gt_bboxes, gt_classes)
+    print(loss_op, focal_loss_op, smooth_l1_loss_op)
+
+    ## check ignored mask
+    # import numpy as np
+    # gt_classes = np.zeros((1, 5, 5))
+    # gt_classes[:, :, 0] = -1
+    # gt_classes[:, 0, 0] = 0
+    # gt_classes[:, 1, 0] = 0
+
+    # ignored_mask = tf.cast(tf.math.equal(gt_classes[:, :, 0], -1), dtype = tf.float32) # -1 == 1
+    # ignored_mask = tf.expand_dims(1 - ignored_mask, axis = -1) # 1 -> 0
+    
+    # sess = tf.Session()
+    # print(sess.run(ignored_mask))

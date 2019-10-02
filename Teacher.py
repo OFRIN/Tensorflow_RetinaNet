@@ -17,7 +17,7 @@ from RetinaNet_Utils import *
 class Teacher(threading.Thread):
     ready = False
     min_data_size = 0
-    max_data_size = 2
+    max_data_size = 5
 
     total_indexs = []
     total_data_list = []
@@ -29,7 +29,7 @@ class Teacher(threading.Thread):
     name = ''
     retina_utils = None
     
-    def __init__(self, npy_path, retina_sizes, min_data_size = 1, max_data_size = 3, name = 'Thread', debug = False):
+    def __init__(self, npy_path, retina_sizes, min_data_size = 1, max_data_size = 5, name = 'Thread', debug = False):
         self.name = name
         self.debug = debug
         
@@ -45,7 +45,7 @@ class Teacher(threading.Thread):
         threading.Thread.__init__(self)
         
     def get_batch_data(self):
-        batch_image_data, batch_gt_bboxes, batch_gt_classes = self.batch_data_list[0]
+        batch_image_data, batch_encode_bboxes, batch_encode_classes = self.batch_data_list[0]
         
         del self.batch_data_list[0]
         self.batch_data_length -= 1
@@ -53,7 +53,7 @@ class Teacher(threading.Thread):
         if self.batch_data_length < self.min_data_size:
             self.ready = False
         
-        return batch_image_data, batch_gt_bboxes, batch_gt_classes
+        return batch_image_data, batch_encode_bboxes, batch_encode_classes
     
     def run(self):
         while True:
@@ -61,14 +61,12 @@ class Teacher(threading.Thread):
                 continue
             
             batch_image_data = []
-            batch_gt_bboxes = []
-            batch_gt_classes = []
+            batch_encode_bboxes = []
+            batch_encode_classes = []
+
             batch_indexs = random.sample(self.total_indexs, BATCH_SIZE * 2)
 
             for data in self.total_data_list[batch_indexs]:
-                # if self.debug:
-                #     delay = time.time()
-                
                 image_name, gt_bboxes, gt_classes = data
                 
                 image_path = TRAIN_DIR + image_name
@@ -87,24 +85,20 @@ class Teacher(threading.Thread):
                 gt_bboxes /= [image_w, image_h, image_w, image_h]
                 gt_bboxes *= [IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_HEIGHT]
 
-                decode_bboxes, decode_classes = self.retina_utils.Encode(gt_bboxes, gt_classes)
-
-                # if self.debug:
-                #     delay = time.time() - delay
-                #     print('[D] {} - {} = {}ms'.format(self.name, 'xml', int(delay * 1000)))
+                encode_bboxes, encode_classes = self.retina_utils.Encode(gt_bboxes, gt_classes)
 
                 batch_image_data.append(image.astype(np.float32))
-                batch_gt_bboxes.append(decode_bboxes)
-                batch_gt_classes.append(decode_classes)
+                batch_encode_bboxes.append(encode_bboxes)
+                batch_encode_classes.append(encode_classes)
 
                 if len(batch_image_data) == BATCH_SIZE:
                     break
             
             batch_image_data = np.asarray(batch_image_data, dtype = np.float32) 
-            batch_gt_bboxes = np.asarray(batch_gt_bboxes, dtype = np.float32)
-            batch_gt_classes = np.asarray(batch_gt_classes, dtype = np.float32)
+            batch_encode_bboxes = np.asarray(batch_encode_bboxes, dtype = np.float32)
+            batch_encode_classes = np.asarray(batch_encode_classes, dtype = np.float32)
             
-            self.batch_data_list.append([batch_image_data, batch_gt_bboxes, batch_gt_classes])
+            self.batch_data_list.append([batch_image_data, batch_encode_bboxes, batch_encode_classes])
             self.batch_data_length += 1
 
             if self.debug:

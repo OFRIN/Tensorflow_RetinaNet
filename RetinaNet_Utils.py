@@ -11,17 +11,19 @@ class RetinaNet_Utils:
     def __init__(self, anchor_scales = ANCHOR_SCALES, 
                        anchor_sizes = ANCHOR_SIZES,
                        aspect_ratios = ASPECT_RATIOS,
-                       image_wh = [IMAGE_WIDTH, IMAGE_HEIGHT]):
+                       image_wh = [IMAGE_WIDTH, IMAGE_HEIGHT],
+                       scale_factor = SCALE_FACTOR):
         self.anchor_scales = anchor_scales
         self.anchor_sizes = anchor_sizes
         self.aspect_ratios = aspect_ratios
 
         self.image_wh = np.asarray(image_wh, dtype = np.float32)
+        self.scale_factor = scale_factor
 
     def generate_anchors(self, sizes):
         anchors = []
         sizes = np.asarray(sizes, dtype = np.int32)
-        
+
         for i in range(len(sizes)):
             size = sizes[i]
             strides = self.image_wh / size
@@ -64,15 +66,15 @@ class RetinaNet_Utils:
 
     def Encode(self, gt_bboxes, gt_classes):
         # default
-        decode_bboxes = np.zeros_like(self.anchors)
-        decode_classes = np.zeros((self.anchors.shape[0], CLASSES), dtype = np.float32)
+        encode_bboxes = np.zeros_like(self.anchors)
+        encode_classes = np.zeros((self.anchors.shape[0], CLASSES), dtype = np.float32)
 
         # exception case 1.
         if len(gt_bboxes) == 0:
-            return decode_bboxes, decode_classes
+            return encode_bboxes, encode_classes
 
         # default ignored (= -1)
-        decode_classes[:, 0] = -1
+        encode_classes[:, 0] = -1
 
         # calculate anchors & gt_bboxes
         ious = compute_bboxes_IoU(self.anchors, gt_bboxes)
@@ -87,22 +89,22 @@ class RetinaNet_Utils:
 
         # update positive & negative classes
         positive_classes = gt_classes[max_iou_indexs][positive_indexs]
-        decode_classes[positive_indexs, positive_classes] = 1.
-        decode_classes[positive_indexs, 0] = 0.
-        decode_classes[negative_indexs, 0] = 1.
-        
-        # update positive bboxes
-        decode_bboxes = gt_bboxes[max_iou_indexs]
+        encode_classes[positive_indexs, positive_classes] = 1.
+        encode_classes[positive_indexs, 0] = 0.
+        encode_classes[negative_indexs, 0] = 1.
 
-        return decode_bboxes, decode_classes
+        # update positive bboxes
+        encode_bboxes = gt_bboxes[max_iou_indexs]
+
+        return encode_bboxes, encode_classes
     
-    def Decode(self, decode_bboxes, decode_classes, image_wh, detect_threshold = 0.01, use_nms = True):
-        total_class_probs = np.max(decode_classes[:, 1:], axis = -1)
-        total_class_indexs = np.argmax(decode_classes[:, 1:], axis = -1)
+    def Decode(self, encode_bboxes, encode_classes, image_wh, detect_threshold = 0.01, use_nms = True):
+        total_class_probs = np.max(encode_classes[:, 1:], axis = -1)
+        total_class_indexs = np.argmax(encode_classes[:, 1:], axis = -1)
 
         cond = total_class_probs >= detect_threshold
         
-        pred_bboxes = decode_bboxes[cond]
+        pred_bboxes = encode_bboxes[cond]
         class_probs = total_class_probs[cond][..., np.newaxis]
         
         pred_bboxes = np.concatenate([pred_bboxes, class_probs], axis = 1)
@@ -116,7 +118,6 @@ class RetinaNet_Utils:
         return pred_bboxes, pred_classes
 
 if __name__ == '__main__':
-    import time
     from RetinaNet import *
 
     input_var = tf.placeholder(tf.float32, [8, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL])
@@ -147,39 +148,39 @@ if __name__ == '__main__':
     # cv2.waitKey(0)
 
     # 2. Demo GT bboxes (Encode -> Decode)
-    xml_paths = glob.glob('D:/_DeepLearning_DB/VOC2007/train/xml/*.xml')
-    
-    for xml_path in xml_paths:
-        image_path, gt_bboxes, gt_classes = xml_read(xml_path, normalize = True)
+    for data in np.load('./dataset/train_detection.npy', allow_pickle = True):
+        # 2.0 load image and labels.
+        image_name, gt_bboxes, gt_classes = data        
+        image_path = TRAIN_DIR + image_name
+
+        gt_bboxes = np.asarray(gt_bboxes, dtype = np.float32)
+        gt_classes = np.asarray([CLASS_DIC[c] for c in gt_classes], dtype = np.int32)
 
         image = cv2.imread(image_path)
-        image_h, image_w, image_c = image.shape
+        h, w, c = image.shape
         
-        encode_time = time.time()
+        gt_bboxes /= [w, h, w, h]
+        gt_bboxes *= [IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_HEIGHT]
         
-        decode_bboxes, decode_classes = retina_utils.Encode(gt_bboxes, gt_classes)
-
-        encode_time = time.time() - encode_time
-        print('# encode time : {}'.format(int(encode_time)))
-
-        positive_count = np.sum(decode_classes[:, 1:])
+        encode_bboxes, encode_classes = retina_utils.Encode(gt_bboxes, gt_classes)
+        positive_count = np.sum(encode_classes[:, 1:])
         
-        positive_mask = np.max(decode_classes[:, 1:], axis = 1)
+        positive_mask = np.max(encode_classes[:, 1:], axis = 1)
         positive_mask = positive_mask[:, np.newaxis]
+
         print(np.min(positive_mask), np.max(positive_mask))
-        
-        print('# ignored :', np.sum(np.sum(decode_classes[:, 0] == -1)))
+        print('# ignored :', np.sum(np.sum(encode_classes[:, 0] == -1)))
         
         # (22890, 4) (22890, 21)
-        print(np.min(positive_mask * decode_bboxes[:, :2]), np.max(positive_mask * decode_bboxes[:, :2]), np.min(positive_mask * decode_bboxes[:, 2:]), np.max(positive_mask * decode_bboxes[:, 2:]))
-        print(decode_bboxes.shape, decode_classes.shape, positive_count)
+        print(np.min(positive_mask * encode_bboxes[:, :2]), np.max(positive_mask * encode_bboxes[:, :2]), np.min(positive_mask * encode_bboxes[:, 2:]), np.max(positive_mask * encode_bboxes[:, 2:]))
+        print(encode_bboxes.shape, encode_classes.shape, positive_count)
 
-        pred_bboxes, pred_classes = retina_utils.Decode(decode_bboxes, decode_classes, [image_w, image_h])
-
-        positive_mask = np.max(decode_classes[:, 1:], axis = 1)
+        pred_bboxes, pred_classes = retina_utils.Decode(encode_bboxes, encode_classes, [w, h])
+        
+        positive_mask = np.max(encode_classes[:, 1:], axis = 1)
         for i, mask in enumerate(positive_mask):
             if mask == 1:
-                xmin, ymin, xmax, ymax = (retina_utils.anchors[i] / [IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_HEIGHT] * [image_w, image_h, image_w, image_h]).astype(np.int32)
+                xmin, ymin, xmax, ymax = (retina_utils.anchors[i] / [IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_HEIGHT] * [w, h, w, h]).astype(np.int32)
                 cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 0, 255), 1)
         
         for pred_bbox, pred_class in zip(pred_bboxes, pred_classes):
