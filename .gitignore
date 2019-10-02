@@ -1,5 +1,5 @@
 *ckpt*
 *npy
 model/
-resnet_v2_model/
 dataset/
+resnet_v1_model/
